@@ -1,0 +1,21 @@
+[package]
+name = "exokernel"
+version = "0.1.0"
+edition = "2021"
+authors = ["ParyantaOS Team"]
+license = "MIT OR Apache-2.0"
+description = "ParyantaOS Exokernel - minimal kernel"
+repository = "https://github.com/ParyantaOS/exokernel"
+
+[dependencies]
+lib-core = { git = "https://github.com/ParyantaOS/lib-core.git" }
+lib-alloc = { git = "https://github.com/ParyantaOS/lib-alloc.git" }
+
+# x86_64 hardware
+x86_64 = "0.14"
+uart_16550 = "0.3"
+pic8259 = "0.10"
+
+# no_std utilities
+spin = "0.9"
+lazy_static = { version = "1.4", features = ["spin_no_std"] }
