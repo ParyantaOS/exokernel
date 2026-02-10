@@ -8,14 +8,24 @@ description = "ParyantaOS Exokernel - minimal kernel"
 repository = "https://github.com/ParyantaOS/exokernel"
 
 [dependencies]
-lib-core = { git = "https://github.com/ParyantaOS/lib-core.git" }
-lib-alloc = { git = "https://github.com/ParyantaOS/lib-alloc.git" }
+# Bootloader API (entry point, boot info, config)
+bootloader_api = "0.11"
 
-# x86_64 hardware
+# x86_64 hardware abstractions
 x86_64 = "0.14"
+
+# Serial port driver (COM1 at 0x3F8 for QEMU debugging)
 uart_16550 = "0.3"
+
+# Programmable Interrupt Controller
 pic8259 = "0.10"
 
 # no_std utilities
 spin = "0.9"
 lazy_static = { version = "1.4", features = ["spin_no_std"] }
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
