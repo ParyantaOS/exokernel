@@ -11,14 +11,25 @@
 #![no_main]
 #![feature(abi_x86_interrupt)]
 
+extern crate alloc;
+
 mod arch;
+mod memory;
 mod serial;
 
-use bootloader_api::{entry_point, BootInfo};
+use bootloader_api::config::Mapping;
+use bootloader_api::{entry_point, BootInfo, BootloaderConfig};
 use core::panic::PanicInfo;
 
-// Register kernel entry point via bootloader_api macro.
-entry_point!(kernel_main);
+/// Configure bootloader to map all physical memory.
+pub static BOOTLOADER_CONFIG: BootloaderConfig = {
+    let mut config = BootloaderConfig::new_default();
+    config.mappings.physical_memory = Some(Mapping::Dynamic);
+    config
+};
+
+// Register kernel entry point with config.
+entry_point!(kernel_main, config = &BOOTLOADER_CONFIG);
 
 /// Kernel entry point — called by bootloader after setting up paging.
 fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
@@ -37,18 +48,26 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     println!("[OK] GDT initialized");
     println!("[OK] IDT initialized");
     println!("[OK] TSS initialized");
-
     println!();
 
-    // Print memory map from bootloader
-    let memory_regions = &boot_info.memory_regions;
-    println!("Memory regions from bootloader:");
-    for (i, region) in memory_regions.iter().enumerate().take(5) {
-        println!("  Region {}: {:#x} - {:#x} ({:?})",
-            i, region.start, region.end, region.kind);
+    // Initialize memory subsystem (frame allocator + heap)
+    memory::init(boot_info);
+
+    // Prove that alloc works!
+    {
+        use alloc::vec::Vec;
+        let mut v = Vec::new();
+        for i in 0..5 {
+            v.push(i + 1);
+        }
+        println!("[OK] alloc works! vec = {:?}", v);
     }
-    if memory_regions.len() > 5 {
-        println!("  ... and {} more regions", memory_regions.len() - 5);
+
+    // Prove that Box works!
+    {
+        use alloc::boxed::Box;
+        let boxed = Box::new(42u64);
+        println!("[OK] Box works! boxed = {}", boxed);
     }
 
     println!();
