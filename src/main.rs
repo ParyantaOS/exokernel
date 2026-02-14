@@ -16,6 +16,7 @@ extern crate alloc;
 mod arch;
 mod memory;
 mod serial;
+mod task;
 
 use bootloader_api::config::Mapping;
 use bootloader_api::{entry_point, BootInfo, BootloaderConfig};
@@ -63,24 +64,27 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     }
 
     println!();
-    println!("Exokernel ready. Timer ticking...");
-    println!("Press Ctrl+A, X to exit QEMU.");
+
+    // ── Scheduler demo ─────────────────────────────────────────
+    let mut sched = task::scheduler::Scheduler::new();
+
+    // TaskA: prints a message on each step
+    sched.spawn("TaskA", 5, |step| {
+        println!("  [TaskA] step {}", step);
+    });
+
+    // TaskB: prints a message on each step
+    sched.spawn("TaskB", 5, |step| {
+        println!("  [TaskB] step {}", step);
+    });
+
+    sched.run();
+
     println!();
+    println!("Exokernel ready. Halting CPU.");
+    println!("Press Ctrl+A, X to exit QEMU.");
 
-    // Main idle loop: HLT sleeps until interrupt, then we check tick count
-    let mut last_heartbeat = 0u64;
-    loop {
-        // HLT wakes on any interrupt (timer fires ~18.2 Hz)
-        x86_64::instructions::hlt();
-
-        let t = arch::interrupts::ticks();
-        // Print heartbeat dot every ~5 seconds (91 ticks)
-        let heartbeat = t / 91;
-        if heartbeat > last_heartbeat {
-            last_heartbeat = heartbeat;
-            print!(".");
-        }
-    }
+    halt_loop();
 }
 
 /// Halt the CPU forever (low power).

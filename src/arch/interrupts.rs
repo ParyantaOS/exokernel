@@ -61,8 +61,10 @@ pub fn enable() {
 pub extern "x86-interrupt" fn timer_handler(_stack_frame: InterruptStackFrame) {
     TICKS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
 
+    // Decrement scheduler fuel counter
+    crate::task::scheduler::timer_tick();
+
     // Send EOI directly via port I/O to avoid locking PICS mutex
-    // PIC1 command port = 0x20, EOI command = 0x20
     unsafe {
         x86_64::instructions::port::Port::<u8>::new(0x20).write(0x20);
     }
