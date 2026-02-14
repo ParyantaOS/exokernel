@@ -21,7 +21,11 @@ pub fn init() {
 #[doc(hidden)]
 pub fn _print(args: ::core::fmt::Arguments) {
     use core::fmt::Write;
-    SERIAL1.lock().write_fmt(args).expect("Printing to serial failed");
+    // Disable interrupts while holding the serial lock to prevent
+    // deadlock if a timer/keyboard interrupt fires mid-print.
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        SERIAL1.lock().write_fmt(args).expect("Printing to serial failed");
+    });
 }
 
 /// Print to serial (QEMU console).

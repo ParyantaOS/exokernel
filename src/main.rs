@@ -43,38 +43,44 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     println!("=====================================");
     println!();
 
-    // Initialize CPU (GDT, IDT, TSS)
+    // Initialize CPU (GDT, IDT, TSS, PIC, enable interrupts)
     arch::init();
     println!("[OK] GDT initialized");
     println!("[OK] IDT initialized");
     println!("[OK] TSS initialized");
+    println!("[OK] PIC initialized (IRQs 32-47)");
+    println!("[OK] Interrupts enabled");
     println!();
 
     // Initialize memory subsystem (frame allocator + heap)
     memory::init(boot_info);
 
-    // Prove that alloc works!
+    // Quick alloc sanity check
     {
-        use alloc::vec::Vec;
-        let mut v = Vec::new();
-        for i in 0..5 {
-            v.push(i + 1);
-        }
+        use alloc::vec;
+        let v = vec![1, 2, 3, 4, 5];
         println!("[OK] alloc works! vec = {:?}", v);
     }
 
-    // Prove that Box works!
-    {
-        use alloc::boxed::Box;
-        let boxed = Box::new(42u64);
-        println!("[OK] Box works! boxed = {}", boxed);
-    }
-
     println!();
-    println!("Exokernel ready. Halting CPU.");
+    println!("Exokernel ready. Timer ticking...");
     println!("Press Ctrl+A, X to exit QEMU.");
+    println!();
 
-    halt_loop();
+    // Main idle loop: HLT sleeps until interrupt, then we check tick count
+    let mut last_heartbeat = 0u64;
+    loop {
+        // HLT wakes on any interrupt (timer fires ~18.2 Hz)
+        x86_64::instructions::hlt();
+
+        let t = arch::interrupts::ticks();
+        // Print heartbeat dot every ~5 seconds (91 ticks)
+        let heartbeat = t / 91;
+        if heartbeat > last_heartbeat {
+            last_heartbeat = heartbeat;
+            print!(".");
+        }
+    }
 }
 
 /// Halt the CPU forever (low power).
@@ -87,9 +93,14 @@ pub fn halt_loop() -> ! {
 /// Panic handler for kernel panics.
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
+    // Disable interrupts during panic to prevent re-entrancy
+    x86_64::instructions::interrupts::disable();
+
     println!();
     println!("!!! KERNEL PANIC !!!");
     println!("{}", info);
 
-    halt_loop();
+    loop {
+        x86_64::instructions::hlt();
+    }
 }
