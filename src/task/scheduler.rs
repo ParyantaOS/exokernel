@@ -1,23 +1,22 @@
 //! Round-robin cooperative scheduler.
 //!
 //! Each task has a step function that gets called once per scheduler turn.
-//! The scheduler interleaves tasks in round-robin order, giving each task
-//! exactly one step per turn. Timer interrupts decrement a fuel counter
-//! that can be used for time-based preemption in the future.
+//! Tasks hold capabilities that are passed to the step function.
 
 use alloc::collections::VecDeque;
+use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 use super::{Task, TaskState};
+use crate::caps::CapId;
 use crate::println;
 
 /// Default fuel (timer ticks) per task slice.
-/// At ~18.2 Hz, 18 ticks ≈ 1 second per task.
 pub const DEFAULT_FUEL: u64 = 18;
 
-/// Global fuel counter — decremented by timer interrupt.
+/// Global fuel counter.
 static FUEL_REMAINING: AtomicU64 = AtomicU64::new(DEFAULT_FUEL);
 
-/// Called from timer interrupt handler — decrement fuel.
+/// Called from timer interrupt handler.
 pub fn timer_tick() {
     let remaining = FUEL_REMAINING.load(Ordering::Relaxed);
     if remaining > 0 {
@@ -25,12 +24,12 @@ pub fn timer_tick() {
     }
 }
 
-/// Check if fuel is exhausted (for future preemptive use).
+/// Check if fuel is exhausted.
 pub fn fuel_exhausted() -> bool {
     FUEL_REMAINING.load(Ordering::Relaxed) == 0
 }
 
-/// Reset fuel for the next task slice.
+/// Reset fuel.
 pub fn refuel() {
     FUEL_REMAINING.store(DEFAULT_FUEL, Ordering::Relaxed);
 }
@@ -48,15 +47,14 @@ impl Scheduler {
         }
     }
 
-    /// Spawn a new task.
-    pub fn spawn(&mut self, name: &'static str, steps: u64, step_fn: fn(u64)) {
-        let task = Task::new(name, steps, step_fn);
+    /// Spawn a new task with capabilities.
+    pub fn spawn(&mut self, name: &'static str, steps: u64, caps: Vec<CapId>, step_fn: fn(u64, &[CapId])) {
+        let task = Task::new(name, steps, step_fn, caps);
         println!("[SCHED] Spawned {} ({}, {} steps)", task.name, task.id, steps);
         self.tasks.push_back(task);
     }
 
     /// Run all tasks in round-robin order until all are done.
-    /// Each task gets exactly 1 step per turn, proving interleaving.
     pub fn run(&mut self) {
         println!("[SCHED] Starting scheduler with {} tasks", self.tasks.len());
         println!();
@@ -66,9 +64,9 @@ impl Scheduler {
                 task.state = TaskState::Running;
                 refuel();
 
-                // Run exactly one step
+                // Run exactly one step, passing the task's capabilities
                 if task.current_step < task.total_steps {
-                    (task.step_fn)(task.current_step);
+                    (task.step_fn)(task.current_step, &task.caps);
                     task.current_step += 1;
                 }
 

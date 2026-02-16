@@ -4,10 +4,15 @@
 //! function that gets called repeatedly. The scheduler gives each
 //! task a fuel budget (timer ticks) and switches to the next task
 //! when fuel runs out.
+//!
+//! Tasks hold capabilities — they start with zero and must be
+//! explicitly granted access.
 
 pub mod scheduler;
 
+use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
+use crate::caps::CapId;
 
 /// Unique task identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,12 +47,13 @@ pub struct Task {
     pub state: TaskState,
     pub current_step: u64,
     pub total_steps: u64,
-    pub step_fn: fn(u64),  // Called with step index
+    pub step_fn: fn(u64, &[CapId]),  // Called with (step_index, caps)
+    pub caps: Vec<CapId>,            // Capabilities held by this task
 }
 
 impl Task {
-    /// Create a new task with the given name, number of steps, and step function.
-    pub fn new(name: &'static str, total_steps: u64, step_fn: fn(u64)) -> Self {
+    /// Create a new task with the given name, steps, function, and capabilities.
+    pub fn new(name: &'static str, total_steps: u64, step_fn: fn(u64, &[CapId]), caps: Vec<CapId>) -> Self {
         Task {
             id: TaskId::new(),
             name,
@@ -55,6 +61,7 @@ impl Task {
             current_step: 0,
             total_steps,
             step_fn,
+            caps,
         }
     }
 }
