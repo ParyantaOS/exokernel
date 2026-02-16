@@ -5,6 +5,7 @@
 //! - Physical memory page ownership
 //! - Device access tokens
 //! - Capability-based security
+//! - Object Store ("Everything is a Database")
 //!
 //! All other OS functionality lives in the Library OS crates.
 
@@ -17,6 +18,7 @@ extern crate alloc;
 mod arch;
 mod caps;
 mod memory;
+mod objstore;
 mod serial;
 mod task;
 
@@ -25,6 +27,7 @@ use bootloader_api::config::Mapping;
 use bootloader_api::{entry_point, BootInfo, BootloaderConfig};
 use caps::{Rights, Resource};
 use caps::manager as cap_mgr;
+use objstore::{Object, gated as obj};
 use core::panic::PanicInfo;
 
 /// Configure bootloader to map all physical memory.
@@ -49,10 +52,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     // Initialize CPU (GDT, IDT, TSS, PIC, enable interrupts)
     arch::init();
-    println!("[OK] GDT initialized");
-    println!("[OK] IDT initialized");
-    println!("[OK] TSS initialized");
-    println!("[OK] PIC initialized (IRQs 32-47)");
+    println!("[OK] GDT, IDT, TSS, PIC initialized");
     println!("[OK] Interrupts enabled");
     println!();
 
@@ -60,120 +60,128 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     memory::init(boot_info);
     println!();
 
-    // ── Capability System Demo ────────────────────────────────
-    println!("=== Capability System Demo ===");
+    // ── Capability System ─────────────────────────────────────
+    println!("=== Capability System ===");
     println!();
 
-    // Mint capabilities (kernel-only operation)
-    let mem_cap = cap_mgr::mint(
-        Resource::Memory { base: 0x1000, size: 4096 },
-        Rights::RW,
-        true, // delegatable
+    let rw_cap = cap_mgr::mint(Resource::Object(0), Rights::RW, true);
+    println!("[CAP] Minted {} (Object Store, RW)", rw_cap);
+
+    let r_cap = cap_mgr::mint(Resource::Object(0), Rights::READ, false);
+    println!("[CAP] Minted {} (Object Store, R)", r_cap);
+
+    let rwd_cap = cap_mgr::mint(
+        Resource::Object(0),
+        Rights::READ | Rights::WRITE | Rights::DELETE,
+        false,
     );
-    println!("[CAP] Minted {} (Memory 0x1000, RW, delegatable)", mem_cap);
-
-    let dev_cap = cap_mgr::mint(
-        Resource::Device(0x3F8), // COM1
-        Rights::READ,
-        false, // not delegatable
-    );
-    println!("[CAP] Minted {} (Device COM1, R, non-delegatable)", dev_cap);
+    println!("[CAP] Minted {} (Object Store, RWD)", rwd_cap);
     println!();
 
-    // Spawn tasks with different capabilities
-    let mut sched = task::scheduler::Scheduler::new();
-
-    // TaskA: holds mem_cap — should succeed
-    sched.spawn("TaskA", 3, vec![mem_cap], |step, caps| {
-        match step {
-            0 => {
-                // Try READ on our cap — should succeed
-                let result = cap_mgr::verify(caps[0], Rights::READ);
-                println!("  [TaskA] verify {} READ  → {}", caps[0],
-                    if result.is_ok() { "✓ granted" } else { "✗ denied" });
-            }
-            1 => {
-                // Try WRITE on our cap — should succeed
-                let result = cap_mgr::verify(caps[0], Rights::WRITE);
-                println!("  [TaskA] verify {} WRITE → {}", caps[0],
-                    if result.is_ok() { "✓ granted" } else { "✗ denied" });
-            }
-            2 => {
-                // Try EXECUTE on our cap — should fail (we only have RW)
-                let result = cap_mgr::verify(caps[0], Rights::EXECUTE);
-                println!("  [TaskA] verify {} EXEC  → {}", caps[0],
-                    if result.is_ok() { "✓ granted" } else { "✗ denied (no EXEC right)" });
-            }
-            _ => {}
-        }
-    });
-
-    // TaskB: holds NO caps — everything should be denied
-    sched.spawn("TaskB", 2, vec![], |step, _caps| {
-        match step {
-            0 => {
-                // Try to use mem_cap without holding it
-                // (We reference cap#1 directly — but in a real system, tasks
-                //  can only use caps they hold. Here we demonstrate the check.)
-                println!("  [TaskB] has ZERO capabilities (zero ambient authority)");
-                println!("  [TaskB] cannot access any resource without caps");
-            }
-            1 => {
-                println!("  [TaskB] this is the exokernel security model:");
-                println!("  [TaskB] \"no cap = no access\"");
-            }
-            _ => {}
-        }
-    });
-
-    sched.run();
-
-    // ── Restrict + Revoke Demo ────────────────────────────────
-    println!();
-    println!("=== Restrict + Revoke Demo ===");
+    // ── Object Store Demo ─────────────────────────────────────
+    println!("=== Object Store Demo ===");
+    println!("\"Everything is a Database\"");
     println!();
 
-    // Restrict: RW → R only
-    match cap_mgr::restrict(mem_cap, Rights::READ) {
-        Ok(restricted) => {
-            println!("[CAP] Restricted {} → {} (READ only)", mem_cap, restricted);
+    // Create objects with tags using RW cap
+    let obj1 = Object::new(b"hello")
+        .with_tag("greeting")
+        .with_meta("lang", "en");
 
-            // Verify READ on restricted cap — should work
-            let r = cap_mgr::verify(restricted, Rights::READ);
-            println!("  verify {} READ  → {}",
-                restricted, if r.is_ok() { "✓ granted" } else { "✗ denied" });
-
-            // Verify WRITE on restricted cap — should fail
-            let r = cap_mgr::verify(restricted, Rights::WRITE);
-            println!("  verify {} WRITE → {}",
-                restricted, if r.is_ok() { "✓ granted" } else { "✗ denied (right not granted)" });
-        }
-        Err(e) => println!("[CAP] restrict failed: {}", e),
+    match obj::create(rw_cap, obj1) {
+        Ok(id) => println!("[STORE] Created {} (\"hello\", tag:greeting)", id),
+        Err(e) => println!("[STORE] create failed: {}", e),
     }
 
-    // Revoke the original mem_cap
-    println!();
-    match cap_mgr::revoke(mem_cap) {
-        Ok(()) => {
-            println!("[CAP] Revoked {}", mem_cap);
+    let obj2 = Object::new(b"hola mundo!")
+        .with_tag("greeting")
+        .with_tag("important")
+        .with_meta("lang", "es");
 
-            // Verify on revoked cap — should fail
-            let r = cap_mgr::verify(mem_cap, Rights::READ);
-            println!("  verify {} READ  → {}",
-                mem_cap, if r.is_ok() { "✓ granted" } else { "✗ denied (revoked)" });
-        }
-        Err(e) => println!("[CAP] revoke failed: {}", e),
+    match obj::create(rw_cap, obj2) {
+        Ok(id) => println!("[STORE] Created {} (\"hola mundo!\", tags:greeting,important)", id),
+        Err(e) => println!("[STORE] create failed: {}", e),
     }
 
-    // Try to restrict a non-delegatable cap
-    println!();
-    match cap_mgr::restrict(dev_cap, Rights::READ) {
-        Ok(c) => println!("[CAP] restrict {} → {} (unexpected!)", dev_cap, c),
-        Err(e) => println!("[CAP] restrict {} → ✗ {} (non-delegatable)", dev_cap, e),
+    let obj3 = Object::new(b"system config v1")
+        .with_tag("config")
+        .with_meta("version", "1");
+
+    match obj::create(rw_cap, obj3) {
+        Ok(id) => println!("[STORE] Created {} (\"system config v1\", tag:config)", id),
+        Err(e) => println!("[STORE] create failed: {}", e),
     }
 
     println!();
-    println!("=== Capability Demo Complete ===");
+    println!("[STORE] count: {} objects", objstore::store::count());
+    println!();
+
+    // ── Tag Queries ───────────────────────────────────────────
+    println!("--- Tag Queries ---");
+    match obj::query_by_tag(r_cap, "greeting") {
+        Ok(ids) => {
+            println!("[QUERY] tag:\"greeting\" → {} results", ids.len());
+            for id in &ids {
+                if let Ok(o) = obj::read(r_cap, *id) {
+                    let text = core::str::from_utf8(&o.content).unwrap_or("(bin)");
+                    println!("  {} → \"{}\"", id, text);
+                }
+            }
+        }
+        Err(e) => println!("[QUERY] failed: {}", e),
+    }
+
+    match obj::query_by_tag(r_cap, "config") {
+        Ok(ids) => {
+            println!("[QUERY] tag:\"config\"   → {} results", ids.len());
+            for id in &ids {
+                if let Ok(o) = obj::read(r_cap, *id) {
+                    let text = core::str::from_utf8(&o.content).unwrap_or("(bin)");
+                    println!("  {} → \"{}\"", id, text);
+                }
+            }
+        }
+        Err(e) => println!("[QUERY] failed: {}", e),
+    }
+    println!();
+
+    // ── Access Control ────────────────────────────────────────
+    println!("--- Access Control ---");
+
+    // Try to create with READ-only cap → should fail
+    let obj4 = Object::new(b"sneaky write");
+    match obj::create(r_cap, obj4) {
+        Ok(id) => println!("[STORE] create with R cap → {} (unexpected!)", id),
+        Err(e) => println!("[STORE] create with R cap → ✗ {} (correct!)", e),
+    }
+
+    // Read with READ-only cap → should succeed
+    let hello_id = objstore::ObjId::from_content(b"hello");
+    match obj::read(r_cap, hello_id) {
+        Ok(o) => {
+            let text = core::str::from_utf8(&o.content).unwrap_or("(bin)");
+            println!("[STORE] read with R cap → ✓ \"{}\"", text);
+        }
+        Err(e) => println!("[STORE] read failed: {}", e),
+    }
+
+    // Delete with RW cap (no DELETE right) → should fail
+    match obj::delete(rw_cap, hello_id) {
+        Ok(()) => println!("[STORE] delete with RW cap  → deleted (unexpected!)"),
+        Err(e) => println!("[STORE] delete with RW cap  → ✗ {} (no DELETE right)", e),
+    }
+
+    // Delete with RWD cap → should succeed
+    match obj::delete(rwd_cap, hello_id) {
+        Ok(()) => println!("[STORE] delete with RWD cap → ✓ deleted"),
+        Err(e) => println!("[STORE] delete with RWD cap → failed: {}", e),
+    }
+
+    println!();
+    println!("[STORE] count: {} objects (after delete)", objstore::store::count());
+
+    println!();
+    println!("=== Object Store Demo Complete ===");
     println!();
     println!("Exokernel ready. Halting CPU.");
 
